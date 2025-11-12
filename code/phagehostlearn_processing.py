@@ -13,10 +13,11 @@ import json
 import subprocess
 import numpy as np
 import pandas as pd
+import time
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SearchIO import HmmerIO
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 from os import listdir
 from xgboost import XGBClassifier
 from bio_embeddings.embed import ProtTransBertBFDEmbedder
@@ -213,7 +214,7 @@ def add_to_database(old_database, new_xlsx_file, save_path, index_col=0, header=
         return
     
 
-def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_suffix='', add=False, test=False):
+def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_suffix='', add=False, test=False, num_phages=None):
     """
     This function loops over the genomes in the phage genomes folder and processed those to
     genes with PHANOTATE.
@@ -228,6 +229,7 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
     OUTPUT: phage_genes.csv containing all the phage genes.
     """
     phage_files = listdir(phage_genomes_path)
+    print('Number of phage files:', len(phage_files))
     if '.DS_Store' in phage_files:
         phage_files.remove('.DS_Store')
     if add == True:
@@ -235,7 +237,10 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
         phage_ids = list(set(RBPbase['phage_ID']))
         phage_files = [x for x in phage_files if x.split('.fasta')[0] not in phage_ids]
         print('Processing ', len(phage_files), ' more phages (add=True)')
-    bar = tqdm(total=len(phage_files), position=0, leave=True)
+    if num_phages is not None:
+        print('Processing only the first ', num_phages, ' phages')
+        phage_files = phage_files[:num_phages]
+    bar = tqdm(total=len(phage_files), position=0, leave=True, desc='Processing phage genomes')
     name_list = []; gene_list = []; gene_ids = []
 
     for file in phage_files:
@@ -312,14 +317,23 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
     return
 
 
-def compute_protein_embeddings(general_path, data_suffix='', add=False):
+def compute_protein_embeddings(general_path, data_suffix='', add=False, num_genes=None):
     """
     This function computes protein embeddings -> SLOW ON CPU! Alternatively, can be done
     in the cloud, using the separate notebook (compute_embeddings_cloud).
     """
     genebase = pd.read_csv(general_path+'/phage_genes'+data_suffix+'.csv')
+    if num_genes is not None:
+        print('Processing only the first ', num_genes, ' phage genes')
+        genebase = genebase.head(num_genes)
+    print('Number of phage genes:', len(genebase))
+    time_start = time.time()
     embedder = ProtTransBertBFDEmbedder()
+    time_end = time.time()
+    print('Time taken to initialize embedder:', time_end - time_start)
+    print('Embedder initialized')
     if add == True:
+        print('Adding new protein embeddings')
         old_embeddings_df = pd.read_csv(general_path+'/phage_protein_embeddings'+data_suffix+'.csv')
         protein_ids = list(old_embeddings_df['ID'])
         sequences = []; names = []
@@ -328,11 +342,18 @@ def compute_protein_embeddings(general_path, data_suffix='', add=False):
                 sequences.append(str(Seq(sequence).translate())[:-1])
                 names.append(genebase['gene_ID'][i])
     else:
+        print('Computing protein embeddings for all phage genes')
         names = list(genebase['gene_ID'])
+        print('Number of protein sequences to embed:', len(names))
         sequences = [str(Seq(sequence).translate())[:-1] for sequence in genebase['gene_sequence']]
     
-    embeddings = [embedder.reduce_per_protein(embedder.embed(sequence)) for sequence in tqdm(sequences)]
-    embeddings_df = pd.concat([pd.DataFrame({'ID':names}), pd.DataFrame(embeddings)], axis=1)
+    print('Number of protein sequences to embed:', len(sequences))
+    protein_embeddings = []
+    progress_bar = tqdm(sequences, desc='Computing protein embeddings', unit='protein')
+    for protein_sequence in progress_bar:
+        reduced_embedding = embedder.reduce_per_protein(embedder.embed(protein_sequence))
+        protein_embeddings.append(reduced_embedding)
+    embeddings_df = pd.concat([pd.DataFrame({'ID':names}), pd.DataFrame(protein_embeddings)], axis=1)
     if add == True:
         embeddings_df = pd.DataFrame(np.vstack([old_embeddings_df, embeddings_df]), columns=old_embeddings_df.columns)
     embeddings_df.to_csv(general_path+'/phage_protein_embeddings'+data_suffix+'.csv', index=False)
