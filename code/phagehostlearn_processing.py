@@ -228,7 +228,8 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
     OUTPUT: phage_genes.csv containing all the phage genes.
     """
     phage_files = listdir(phage_genomes_path)
-    phage_files.remove('.DS_Store')
+    if '.DS_Store' in phage_files:
+        phage_files.remove('.DS_Store')
     if add == True:
         RBPbase = pd.read_csv(general_path+'/RBPbase'+data_suffix+'.csv')
         phage_ids = list(set(RBPbase['phage_ID']))
