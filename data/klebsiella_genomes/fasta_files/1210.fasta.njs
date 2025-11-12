@@ -6,9 +6,9 @@
   "description": "/Users/eliottvalette/Documents/Clones/PhageHostLearn/data/klebsiella_genomes/fasta_files/1210.fasta",
   "number-of-letters": 5426295,
   "number-of-sequences": 265,
-  "last-updated": "2025-11-12T20:26:00",
+  "last-updated": "2025-11-12T21:13:00",
   "number-of-volumes": 1,
-  "bytes-total": 1536449,
+  "bytes-total": 1536471,
   "bytes-to-cache": 1360111,
   "files": [
     "1210.fasta.ndb",

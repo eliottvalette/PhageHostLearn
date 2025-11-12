@@ -200,7 +200,7 @@ def fix_paths(args):
 
 def make_temp_dir(args):
     """Makes the temporary directory, if necessary. Returns the temp directory path."""
-    temp_dir_name = 'kaptive_temp_' + str(os.getpid()) + '_' + str(random.randint(0, 999999))
+    temp_dir_name = 'kaptive_temp_'
     temp_dir = os.path.join(os.path.dirname(args.out), temp_dir_name)
     if not os.path.exists(temp_dir):
         os.makedirs(temp_dir)
