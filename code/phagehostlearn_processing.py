@@ -245,16 +245,37 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
         raw_str = phanotate_path + ' ' + file_dir
         process = subprocess.Popen(raw_str, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         stdout, stderr = process.communicate()
+        stdout_text = stdout.decode('utf-8', errors='ignore')
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"PHANOTATE command failed for {file_dir} with exit code {process.returncode}. "
+                f"Command output:\n{stdout_text}"
+            )
         std_splits = stdout.split(sep=b'\n')
         std_splits = std_splits[2:] #std_splits.pop(0)
+        if not any(split.strip() for split in std_splits):
+            raise ValueError(
+                f"PHANOTATE did not return ORF predictions for {file_dir}. "
+                f"Command output:\n{stdout_text}"
+            )
         
         # Save and reload TSV
-        temp_tab = open(general_path+'/phage_results.tsv', 'wb')
+        temp_tab_path = os.path.join(general_path, 'phage_results.tsv')
+        temp_tab = open(temp_tab_path, 'wb')
         for split in std_splits:
             split = split.replace(b',', b'') # replace commas for pandas compatibility
             temp_tab.write(split + b'\n')
         temp_tab.close()
-        results_orfs = pd.read_csv(general_path+'/phage_results.tsv', sep='\t', lineterminator='\n', index_col=False)
+        try:
+            results_orfs = pd.read_csv(temp_tab_path, sep='\t', lineterminator='\n', index_col=False)
+        except pd.errors.EmptyDataError as exc:
+            with open(temp_tab_path, 'r', encoding='utf-8', errors='ignore') as temp_in:
+                temp_preview = temp_in.read()
+            raise ValueError(
+                f"PHANOTATE output for {file_dir} produced an empty or invalid TSV file.\n"
+                f"Command output:\n{stdout_text}\n"
+                f"Temporary TSV content:\n{temp_preview}"
+            ) from exc
         
         # fill up lists accordingly
         name = file.split('.fasta')[0]

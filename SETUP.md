@@ -40,19 +40,28 @@ pip install regex requests safetensors tokenizers jinja2 networkx sympy
 pip install "huggingface-hub>=0.34.0,<1.0"
 ```
 
-### 6. Install fair-esm (ESM-2)
+### 6. Install PHANOTATE
+
+PHANOTATE is required for phage gene calling. Install it inside the virtual environment so the notebook can invoke it directly.
+
+```bash
+pip install phanotate
+which phanotate.py  
+```
+
+### 7. Install fair-esm (ESM-2)
 
 ```bash
 pip install fair-esm
 ```
 
-### 7. Register Jupyter kernel
+### 8. Register Jupyter kernel
 
 ```bash
 python -m ipykernel install --user --name=phagehostlearn --display-name "Python (phagehostlearn)"
 ```
 
-### 8. Verify installation
+### 9. Verify installation
 
 ```bash
 cd code
@@ -74,6 +83,7 @@ pip install h5py "ruamel.yaml>=0.17.10,<0.18.0" plotly umap-learn
 pip install appdirs atomicwrites gensim humanize "lock>=2018.3.25,<2019.0.0" python-slugify
 pip install regex requests safetensors tokenizers jinja2 networkx sympy
 pip install "huggingface-hub>=0.34.0,<1.0"
+pip install phanotate
 pip install fair-esm
 python -m ipykernel install --user --name=phagehostlearn --display-name "Python (phagehostlearn)"
 ```
