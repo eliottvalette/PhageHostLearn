@@ -114,3 +114,5 @@ dmypy.json
 .pyre/
 *.fasta
 .DS_Store
+
+for_collab.zip
