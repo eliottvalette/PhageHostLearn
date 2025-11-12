@@ -320,12 +320,25 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
     return
 
 
-def compute_protein_embeddings(general_path, data_suffix='', add=False, num_genes=None):
+def compute_protein_embeddings(general_path, data_suffix='', add=False, num_genes=None, force_recompute=False):
     """
     This function computes protein embeddings -> SLOW ON CPU! Alternatively, can be done
     in the cloud, using the separate notebook (compute_embeddings_cloud).
     """
     import sys
+    
+    embeddings_path = os.path.join(general_path, f'phage_protein_embeddings{data_suffix}.csv')
+    embeddings_path_fallback = os.path.join(general_path, 'phage_protein_embeddings.csv')
+    
+    print(f'Checking for existing embeddings file: {embeddings_path}')
+    if (not force_recompute) and os.path.exists(embeddings_path):
+        print(f'Embedding file already exists at {embeddings_path}. Skipping computation.')
+        print('Use force_recompute=True to rebuild it.')
+        return
+    elif (not force_recompute) and os.path.exists(embeddings_path_fallback):
+        print(f'Using existing embedding file (without suffix): {embeddings_path_fallback}')
+        print('Skipping computation.')
+        return
     
     print('Starting compute_protein_embeddings...')
     print(f'Python version: {sys.version}')

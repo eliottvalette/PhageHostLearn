@@ -20,6 +20,7 @@ import subprocess
 import time
 import math
 from os import listdir
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -129,14 +130,19 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
 def compute_protein_embeddings(general_path, data_suffix='', add=False, num_genes=None, force_recompute=False):
     """Compute protein embeddings using ProtTransBertBFD."""
     embeddings_path = os.path.join(general_path, f'phage_protein_embeddings{data_suffix}.csv')
+    embeddings_path_fallback = os.path.join(general_path, 'phage_protein_embeddings.csv')
     
     print(f'  Checking for existing embeddings file: {embeddings_path}')
     if (not force_recompute) and os.path.exists(embeddings_path):
         print(f'  Embedding file already exists at {embeddings_path}. Skipping computation.')
         print('  Use force_recompute=True to rebuild it.')
         return
+    elif (not force_recompute) and os.path.exists(embeddings_path_fallback):
+        print(f'  Using existing embedding file (without suffix): {embeddings_path_fallback}')
+        print('  Skipping computation.')
+        return
     
-    print(f'  Embeddings file not found or force_recompute=True. Computing embeddings...')
+    print(f'{"Force recompute" if force_recompute else "File not found"}. Computing embeddings...')
     
     genebase = pd.read_csv(general_path + '/phage_genes' + data_suffix + '.csv')
     if num_genes is not None:
@@ -387,7 +393,25 @@ def xlsx_database_to_csv(xlsx_file, save_path, index_col=0, header=0, export=Tru
 
 def process_interactions(general_path, interactions_xlsx_path, data_suffix=''):
     """Process the interaction matrix and export it to CSV."""
-    output = general_path + '/phage_host_interactions' + data_suffix
+    output_path = os.path.join(general_path, f'phage_host_interactions{data_suffix}.csv')
+    output_path_fallback = os.path.join(general_path, 'phage_host_interactions.csv')
+    
+    if os.path.exists(output_path):
+        print(f"  Interaction matrix already exists at {output_path}. Skipping processing.")
+        return
+    elif os.path.exists(output_path_fallback):
+        print(f"  Using existing interaction matrix (without suffix): {output_path_fallback}")
+        print("  Skipping processing.")
+        return
+    
+    if not os.path.exists(interactions_xlsx_path):
+        raise FileNotFoundError(
+            f"Interaction matrix XLSX file not found at {interactions_xlsx_path} "
+            f"and CSV file not found at {output_path} or {output_path_fallback}. "
+            f"Please provide the XLSX file or ensure the CSV file exists."
+        )
+    
+    output = os.path.join(general_path, f'phage_host_interactions{data_suffix}')
     xlsx_database_to_csv(interactions_xlsx_path, output)
     print(f"  Interaction matrix processed and saved to: {output}.csv")
     return
@@ -397,10 +421,23 @@ def process_interactions(general_path, interactions_xlsx_path, data_suffix=''):
 # Feature Construction Functions
 # ============================================================================
 
-def compute_esm2_embeddings_rbp(general_path, data_suffix='', add=False):
+def compute_esm2_embeddings_rbp(general_path, data_suffix='', add=False, force_recompute=False):
     """
     This function computes ESM-2 embeddings for the RBPs, from the RBPbase.csv file.
     """
+    embeddings_path = os.path.join(general_path, f'esm2_embeddings_rbp{data_suffix}.csv')
+    embeddings_path_fallback = os.path.join(general_path, 'esm2_embeddings_rbp.csv')
+    
+    print(f'  Checking for existing embeddings file: {embeddings_path}')
+    if (not force_recompute) and os.path.exists(embeddings_path):
+        print(f'  RBP embeddings file already exists at {embeddings_path}. Skipping computation.')
+        print('  Use force_recompute=True to rebuild it.')
+        return
+    elif (not force_recompute) and os.path.exists(embeddings_path_fallback):
+        print(f'  Using existing RBP embeddings file (without suffix): {embeddings_path_fallback}')
+        print('  Skipping computation.')
+        return
+    
     print("  Loading ESM-2 model...")
     model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
     batch_converter = alphabet.get_batch_converter()
@@ -442,10 +479,23 @@ def compute_esm2_embeddings_rbp(general_path, data_suffix='', add=False):
     return
 
 
-def compute_esm2_embeddings_loci(general_path, data_suffix='', add=False):
+def compute_esm2_embeddings_loci(general_path, data_suffix='', add=False, force_recompute=False):
     """
     This function computes ESM-2 embeddings for the loci proteins, from the Locibase.json file.
     """
+    embeddings_path = os.path.join(general_path, f'esm2_embeddings_loci{data_suffix}.csv')
+    embeddings_path_fallback = os.path.join(general_path, 'esm2_embeddings_loci.csv')
+    
+    print(f'  Checking for existing embeddings file: {embeddings_path}')
+    if (not force_recompute) and os.path.exists(embeddings_path):
+        print(f'  Loci embeddings file already exists at {embeddings_path}. Skipping computation.')
+        print('  Use force_recompute=True to rebuild it.')
+        return
+    elif (not force_recompute) and os.path.exists(embeddings_path_fallback):
+        print(f'  Using existing loci embeddings file (without suffix): {embeddings_path_fallback}')
+        print('  Skipping computation.')
+        return
+    
     print("  Loading ESM-2 model...")
     model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
     batch_converter = alphabet.get_batch_converter()
@@ -554,7 +604,8 @@ def main():
     print("\n[STEP 1] Initial set-up")
     print("-" * 80)
     
-    project_root = os.path.dirname(os.getcwd())
+    script_directory = Path(__file__).resolve().parent
+    project_root = str(script_directory.parent)
     general_path = os.path.join(project_root, 'data')
     results_path = os.path.join(project_root, 'results')
     data_suffix = ''
@@ -578,31 +629,54 @@ def main():
     
     # 2.1 PHANOTATE
     print("\n[STEP 2.1] Running PHANOTATE on phage genomes...")
-    phage_genomes_path = general_path + '/phages_genomes'
+    phage_genomes_path = os.path.join(general_path, 'phages_genomes')
     phanotate_path = '/Users/eliottvalette/Documents/Clones/PhageHostLearn/.venv/bin/phanotate.py'
     phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_suffix=data_suffix, num_phages=2)
     
-    # 2.2 Protein embeddings
-    print("\n[STEP 2.2] Computing protein embeddings with ProtTransBertBFD...")
-    compute_protein_embeddings(general_path, data_suffix=data_suffix, num_genes=5)
+    # Check if RBPbase already exists (if so, we can skip steps 2.2 and 2.3)
+    rbpbase_path = os.path.join(general_path, f'RBPbase{data_suffix}.csv')
+    rbpbase_path_fallback = os.path.join(general_path, 'RBPbase.csv')
     
-    # 2.3 PhageRBPdetect
-    print("\n[STEP 2.3] Running PhageRBPdetect...")
-    pfam_path = general_path + '/RBPdetect_phageRBPs.hmm'
-    hmmer_path = '/Users/Dimi/hmmer-3.3.1'
-    xgb_path = general_path + '/RBPdetect_xgb_hmm.json'
-    gene_embeddings_path = general_path + '/phage_protein_embeddings' + data_suffix + '.csv'
-    phageRBPdetect(general_path, pfam_path, hmmer_path, xgb_path, gene_embeddings_path, data_suffix=data_suffix)
+    if os.path.exists(rbpbase_path) or os.path.exists(rbpbase_path_fallback):
+        print("\n[STEP 2.2] Computing protein embeddings with ProtTransBertBFD...")
+        print("  RBPbase already exists - skipping protein embeddings computation.")
+        print("\n[STEP 2.3] Running PhageRBPdetect...")
+        print("  RBPbase already exists - skipping PhageRBPdetect.")
+    else:
+        # 2.2 Protein embeddings
+        print("\n[STEP 2.2] Computing protein embeddings with ProtTransBertBFD...")
+        compute_protein_embeddings(general_path, data_suffix=data_suffix, num_genes=5)
+        
+        # 2.3 PhageRBPdetect
+        print("\n[STEP 2.3] Running PhageRBPdetect...")
+        pfam_path = os.path.join(general_path, 'RBPdetect_phageRBPs.hmm')
+        if not os.path.exists(pfam_path):
+            pfam_path = os.path.join(project_root, 'code', 'RBPdetect_phageRBPs.hmm')
+        hmmer_path = '/Users/Dimi/hmmer-3.3.1'
+        xgb_path = os.path.join(general_path, 'RBPdetect_xgb_hmm.json')
+        if not os.path.exists(xgb_path):
+            xgb_path = os.path.join(project_root, 'code', 'RBPdetect_xgb_hmm.json')
+        gene_embeddings_path = os.path.join(general_path, f'phage_protein_embeddings{data_suffix}.csv')
+        gene_embeddings_path_fallback = os.path.join(general_path, 'phage_protein_embeddings.csv')
+        if not os.path.exists(gene_embeddings_path) and os.path.exists(gene_embeddings_path_fallback):
+            gene_embeddings_path = gene_embeddings_path_fallback
+        phageRBPdetect(general_path, pfam_path, hmmer_path, xgb_path, gene_embeddings_path, data_suffix=data_suffix)
     
     # 2.4 Kaptive
     print("\n[STEP 2.4] Running Kaptive on bacterial genomes...")
-    bact_genomes_path = general_path + '/klebsiella_genomes/fasta_files'
-    kaptive_database_path = general_path + '/Klebsiella_k_locus_primary_reference.gbk'
-    process_bacterial_genomes(general_path, bact_genomes_path, kaptive_database_path, data_suffix=data_suffix)
+    locibase_path = os.path.join(general_path, f'Locibase{data_suffix}.json')
+    locibase_path_fallback = os.path.join(general_path, 'Locibase.json')
+    
+    if os.path.exists(locibase_path) or os.path.exists(locibase_path_fallback):
+        print("  Locibase already exists - skipping Kaptive processing.")
+    else:
+        bact_genomes_path = os.path.join(general_path, 'klebsiella_genomes', 'fasta_files')
+        kaptive_database_path = os.path.join(general_path, 'Klebsiella_k_locus_primary_reference.gbk')
+        process_bacterial_genomes(general_path, bact_genomes_path, kaptive_database_path, data_suffix=data_suffix)
     
     # 2.5 Process interactions
     print("\n[STEP 2.5] Processing interaction matrix...")
-    interactions_xlsx_path = general_path + '/klebsiella_phage_host_interactions.xlsx'
+    interactions_xlsx_path = os.path.join(general_path, 'klebsiella_phage_host_interactions.xlsx')
     process_interactions(general_path, interactions_xlsx_path, data_suffix=data_suffix)
     
     print("\nData processing completed")
@@ -625,8 +699,14 @@ def main():
     
     # 3.3 Construct feature matrices
     print("\n[STEP 3.3] Constructing feature matrices...")
-    rbp_embeddings_path = general_path + '/esm2_embeddings_rbp' + data_suffix + '.csv'
-    loci_embeddings_path = general_path + '/esm2_embeddings_loci' + data_suffix + '.csv'
+    rbp_embeddings_path = os.path.join(general_path, f'esm2_embeddings_rbp{data_suffix}.csv')
+    loci_embeddings_path = os.path.join(general_path, f'esm2_embeddings_loci{data_suffix}.csv')
+    
+    # Use fallback paths if suffixed files don't exist
+    if not os.path.exists(rbp_embeddings_path):
+        rbp_embeddings_path = os.path.join(general_path, 'esm2_embeddings_rbp.csv')
+    if not os.path.exists(loci_embeddings_path):
+        loci_embeddings_path = os.path.join(general_path, 'esm2_embeddings_loci.csv')
     features_esm2, labels, groups_loci, groups_phage = construct_feature_matrices(
         general_path, data_suffix, loci_embeddings_path, rbp_embeddings_path, mode='train'
     )
@@ -653,8 +733,7 @@ def main():
         n_estimators=250,
         max_depth=7,
         n_jobs=cpus,
-        eval_metric='logloss',
-        use_label_encoder=False
+        eval_metric='logloss'
     )
     print("  Fitting XGBoost model...")
     xgb.fit(features_esm2, labels)
@@ -699,8 +778,7 @@ def main():
             n_estimators=250,
             max_depth=7,
             n_jobs=cpus,
-            eval_metric='logloss',
-            use_label_encoder=False
+            eval_metric='logloss'
         )
         xgb.fit(Xlan_train, y_train)
         score_xgb = xgb.predict_proba(Xlan_test)[:, 1]

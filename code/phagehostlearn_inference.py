@@ -11,6 +11,7 @@ Overview:
 4. Predicting new interactions and ranking
 """
 
+import os
 import pickle
 import time
 import numpy as np
@@ -33,10 +34,12 @@ def main():
     print("-" * 80)
     
     path = '/Users/eliottvalette/Documents/Clones/PhageHostLearn/data'
+    code_path = '/Users/eliottvalette/Documents/Clones/PhageHostLearn/code'
     phages_path = path + '/phages_genomes'
     bacteria_path = path + '/bacteria_genomes'
-    pfam_path = '/Users/eliottvalette/Documents/Clones/PhageHostLearn/code/RBPdetect_phageRBPs.hmm'
-    xgb_path = '/Users/eliottvalette/Documents/Clones/PhageHostLearn/code/RBPdetect_xgb_hmm.json'
+    pfam_path = code_path + '/RBPdetect_phageRBPs.hmm'
+    xgb_path = code_path + '/RBPdetect_xgb_hmm.json'
+    xgb_model_path = code_path + '/phagehostlearn_esm2_xgb.json'
     kaptive_db_path = path + '/Klebsiella_k_locus_primary_reference.gbk'
     suffix = 'inference'
     hmmer_path = path + '/hmmer-3.4'
@@ -63,25 +66,53 @@ def main():
     phanotate_path = '/Users/eliottvalette/Documents/Clones/PhageHostLearn/.venv/bin/phanotate.py'
     phlp.phanotate_processing(path, phages_path, phanotate_path, data_suffix=suffix, num_phages=2)
     print("PHANOTATE processing completed")
-    print("All phage genomes processed")
-    time.sleep(1)
+
+    # Check if RBPbase already exists (if so, we can skip steps 2.2 and 2.3)
+    rbpbase_path = os.path.join(path, f'RBPbase{suffix}.csv')
+    rbpbase_path_fallback = os.path.join(path, 'RBPbase.csv')
     
-    # 2.2 Protein embeddings
-    print("\n[STEP 2.2] Computing protein embeddings with ProtTransBertBFD...")
-    print("Note: This can be done faster in the cloud (see compute_embeddings_cloud.ipynb)")
-    phlp.compute_protein_embeddings(path, data_suffix=suffix)
-    print("Protein embeddings computation completed")
-    
-    # 2.3 PhageRBPdetect
-    print("\n[STEP 2.3] Running PhageRBPdetect...")
-    gene_embeddings_file = path + '/phage_protein_embeddings' + suffix + '.csv'
-    phlp.phageRBPdetect(path, pfam_path, hmmer_path, xgb_path, gene_embeddings_file, data_suffix=suffix)
-    print("PhageRBPdetect completed")
+    if os.path.exists(rbpbase_path) or os.path.exists(rbpbase_path_fallback):
+        print("\n[STEP 2.2] Computing protein embeddings with ProtTransBertBFD...")
+        print("  RBPbase already exists - skipping protein embeddings computation.")
+        print("\n[STEP 2.3] Running PhageRBPdetect...")
+        print("  RBPbase already exists - skipping PhageRBPdetect.")
+    else:
+        # 2.2 Protein embeddings
+        print("\n[STEP 2.2] Computing protein embeddings with ProtTransBertBFD...")
+        print("Note: This can be done faster in the cloud (see compute_embeddings_cloud.ipynb)")
+        
+        embeddings_path = os.path.join(path, f'phage_protein_embeddings{suffix}.csv')
+        embeddings_path_fallback = os.path.join(path, 'phage_protein_embeddings.csv')
+        
+        if os.path.exists(embeddings_path):
+            print(f"  Embedding file already exists at: {embeddings_path}")
+            print("  Skipping protein embeddings computation.")
+            gene_embeddings_file = embeddings_path
+        elif os.path.exists(embeddings_path_fallback):
+            print(f"  Using existing embedding file (without suffix): {embeddings_path_fallback}")
+            print("  Skipping protein embeddings computation.")
+            gene_embeddings_file = embeddings_path_fallback
+        else:
+            print(f"  Embedding file not found. Computing embeddings...")
+            phlp.compute_protein_embeddings(path, data_suffix=suffix)
+            print("  Protein embeddings computation completed")
+            gene_embeddings_file = embeddings_path
+        
+        # 2.3 PhageRBPdetect
+        print("\n[STEP 2.3] Running PhageRBPdetect...")
+        phlp.phageRBPdetect(path, pfam_path, hmmer_path, xgb_path, gene_embeddings_file, data_suffix=suffix)
+        print("PhageRBPdetect completed")
     
     # 2.4 Kaptive
     print("\n[STEP 2.4] Running Kaptive on bacterial genomes...")
-    phlp.process_bacterial_genomes(path, bacteria_path, kaptive_db_path, data_suffix=suffix)
-    print("Kaptive processing completed")
+    locibase_path = os.path.join(path, f'Locibase{suffix}.json')
+    locibase_path_fallback = os.path.join(path, 'Locibase.json')
+    
+    if os.path.exists(locibase_path) or os.path.exists(locibase_path_fallback):
+        print("  Locibase already exists - skipping Kaptive processing.")
+    else:
+        phlp.process_bacterial_genomes(path, bacteria_path, kaptive_db_path, data_suffix=suffix)
+        print("Kaptive processing completed")
     print("Data processing completed")
     
     # ============================================================================
@@ -94,18 +125,39 @@ def main():
     
     # 3.1 ESM-2 features for RBPs
     print("\n[STEP 3.1] Computing ESM-2 embeddings for RBPs...")
-    phlf.compute_esm2_embeddings_rbp(path, data_suffix=suffix)
-    print("ESM-2 embeddings for RBPs completed")
+    rbp_embeddings_path = path + '/esm2_embeddings_rbp' + suffix + '.csv'
+    rbp_embeddings_path_fallback = path + '/esm2_embeddings_rbp.csv'  # Without suffix
+    
+    if os.path.exists(rbp_embeddings_path):
+        print(f"  RBP embeddings file already exists at: {rbp_embeddings_path}")
+        print("  Skipping ESM-2 embeddings computation for RBPs.")
+    elif os.path.exists(rbp_embeddings_path_fallback):
+        print(f"  Using existing RBP embeddings file (without suffix): {rbp_embeddings_path_fallback}")
+        rbp_embeddings_path = rbp_embeddings_path_fallback
+        print("  Skipping ESM-2 embeddings computation for RBPs.")
+    else:
+        phlf.compute_esm2_embeddings_rbp(path, data_suffix=suffix)
+        print("  ESM-2 embeddings for RBPs completed")
     
     # 3.2 ESM-2 features for loci
     print("\n[STEP 3.2] Computing ESM-2 embeddings for loci...")
-    phlf.compute_esm2_embeddings_loci(path, data_suffix=suffix)
-    print("ESM-2 embeddings for loci completed")
+    loci_embeddings_path = path + '/esm2_embeddings_loci' + suffix + '.csv'
+    loci_embeddings_path_fallback = path + '/esm2_embeddings_loci.csv'  # Without suffix
+    
+    if os.path.exists(loci_embeddings_path):
+        print(f"  Loci embeddings file already exists at: {loci_embeddings_path}")
+        print("  Skipping ESM-2 embeddings computation for loci.")
+    elif os.path.exists(loci_embeddings_path_fallback):
+        print(f"  Using existing loci embeddings file (without suffix): {loci_embeddings_path_fallback}")
+        loci_embeddings_path = loci_embeddings_path_fallback
+        print("  Skipping ESM-2 embeddings computation for loci.")
+    else:
+        phlf.compute_esm2_embeddings_loci(path, data_suffix=suffix)
+        print("  ESM-2 embeddings for loci completed")
     
     # 3.3 Construct feature matrices
     print("\n[STEP 3.3] Constructing feature matrices...")
-    rbp_embeddings_path = path + '/esm2_embeddings_rbp' + suffix + '.csv'
-    loci_embeddings_path = path + '/esm2_embeddings_loci' + suffix + '.csv'
+    # Use the paths already defined above
     features_esm2, groups_bact = phlf.construct_feature_matrices(
         path, suffix, loci_embeddings_path, rbp_embeddings_path, mode='test'
     )
@@ -122,9 +174,12 @@ def main():
     
     # 4.1 Load model and make predictions
     print("\n[STEP 4.1] Loading XGBoost model and making predictions...")
+    print(f"  Loading model from: {xgb_model_path}")
+    if not os.path.exists(xgb_model_path):
+        raise FileNotFoundError(f"XGBoost model file not found at: {xgb_model_path}")
     xgb = XGBClassifier()
-    xgb.load_model('phagehostlearn_esm2_xgb.json')
-    print("Model loaded successfully")
+    xgb.load_model(xgb_model_path)
+    print("  Model loaded successfully")
     
     scores_xgb = xgb.predict_proba(features_esm2)[:, 1]
     print(f"Predictions made for {len(scores_xgb)} interactions")

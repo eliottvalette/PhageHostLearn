@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 # 1 - FUNCTIONS
 # --------------------------------------------------
-def compute_esm2_embeddings_rbp(general_path, data_suffix='', add=False):
+def compute_esm2_embeddings_rbp(general_path, data_suffix='', add=False, force_recompute=False):
     """
     This function computes ESM-2 embeddings for the RBPs, from the RBPbase.csv file.
 
@@ -30,6 +30,20 @@ def compute_esm2_embeddings_rbp(general_path, data_suffix='', add=False):
     - data suffix to optionally add to the saved file name (default='')
     OUTPUT: esm2_embeddings_rbp.csv
     """
+    import os
+    embeddings_path = os.path.join(general_path, f'esm2_embeddings_rbp{data_suffix}.csv')
+    embeddings_path_fallback = os.path.join(general_path, 'esm2_embeddings_rbp.csv')
+    
+    print(f'  Checking for existing embeddings file: {embeddings_path}')
+    if (not force_recompute) and os.path.exists(embeddings_path):
+        print(f'  RBP embeddings file already exists at {embeddings_path}. Skipping computation.')
+        print('  Use force_recompute=True to rebuild it.')
+        return
+    elif (not force_recompute) and os.path.exists(embeddings_path_fallback):
+        print(f'  Using existing RBP embeddings file (without suffix): {embeddings_path_fallback}')
+        print('  Skipping computation.')
+        return
+    
     # load the ESM2 model
     model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
     batch_converter = alphabet.get_batch_converter()
@@ -69,7 +83,7 @@ def compute_esm2_embeddings_rbp(general_path, data_suffix='', add=False):
     return
 
 
-def compute_esm2_embeddings_loci(general_path, data_suffix='', add=False):
+def compute_esm2_embeddings_loci(general_path, data_suffix='', add=False, force_recompute=False):
     """
     This function computes ESM-2 embeddings for the loci proteins, from the Locibase.json file.
 
@@ -78,6 +92,20 @@ def compute_esm2_embeddings_loci(general_path, data_suffix='', add=False):
     - data suffix to optionally add to the saved file name (default='')
     OUTPUT: esm2_embeddings_loci.csv
     """
+    import os
+    embeddings_path = os.path.join(general_path, f'esm2_embeddings_loci{data_suffix}.csv')
+    embeddings_path_fallback = os.path.join(general_path, 'esm2_embeddings_loci.csv')
+    
+    print(f'  Checking for existing embeddings file: {embeddings_path}')
+    if (not force_recompute) and os.path.exists(embeddings_path):
+        print(f'  Loci embeddings file already exists at {embeddings_path}. Skipping computation.')
+        print('  Use force_recompute=True to rebuild it.')
+        return
+    elif (not force_recompute) and os.path.exists(embeddings_path_fallback):
+        print(f'  Using existing loci embeddings file (without suffix): {embeddings_path_fallback}')
+        print('  Skipping computation.')
+        return
+    
     # Load ESM-2 model
     model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
     batch_converter = alphabet.get_batch_converter()
