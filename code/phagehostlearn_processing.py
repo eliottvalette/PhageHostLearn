@@ -13,14 +13,13 @@ import json
 import subprocess
 import numpy as np
 import pandas as pd
-import time
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SearchIO import HmmerIO
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from os import listdir
 from xgboost import XGBClassifier
-# ProtTransBertBFDEmbedder imported lazily in compute_protein_embeddings to avoid loading heavy model at module import
+from bio_embeddings.embed import ProtTransBertBFDEmbedder
 
 
 # 1 - FUNCTIONS
@@ -214,7 +213,7 @@ def add_to_database(old_database, new_xlsx_file, save_path, index_col=0, header=
         return
     
 
-def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_suffix='', add=False, test=False, num_phages=None):
+def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_suffix='', add=False, test=False):
     """
     This function loops over the genomes in the phage genomes folder and processed those to
     genes with PHANOTATE.
@@ -229,18 +228,13 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
     OUTPUT: phage_genes.csv containing all the phage genes.
     """
     phage_files = listdir(phage_genomes_path)
-    print('Number of phage files:', len(phage_files))
-    if '.DS_Store' in phage_files:
-        phage_files.remove('.DS_Store')
+    phage_files.remove('.DS_Store')
     if add == True:
         RBPbase = pd.read_csv(general_path+'/RBPbase'+data_suffix+'.csv')
         phage_ids = list(set(RBPbase['phage_ID']))
         phage_files = [x for x in phage_files if x.split('.fasta')[0] not in phage_ids]
         print('Processing ', len(phage_files), ' more phages (add=True)')
-    if num_phages is not None:
-        print('Processing only the first ', num_phages, ' phages')
-        phage_files = phage_files[:num_phages]
-    bar = tqdm(total=len(phage_files), position=0, leave=True, desc='Processing phage genomes')
+    bar = tqdm(total=len(phage_files), position=0, leave=True)
     name_list = []; gene_list = []; gene_ids = []
 
     for file in phage_files:
@@ -250,37 +244,16 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
         raw_str = phanotate_path + ' ' + file_dir
         process = subprocess.Popen(raw_str, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         stdout, stderr = process.communicate()
-        stdout_text = stdout.decode('utf-8', errors='ignore')
-        if process.returncode != 0:
-            raise RuntimeError(
-                f"PHANOTATE command failed for {file_dir} with exit code {process.returncode}. "
-                f"Command output:\n{stdout_text}"
-            )
         std_splits = stdout.split(sep=b'\n')
         std_splits = std_splits[2:] #std_splits.pop(0)
-        if not any(split.strip() for split in std_splits):
-            raise ValueError(
-                f"PHANOTATE did not return ORF predictions for {file_dir}. "
-                f"Command output:\n{stdout_text}"
-            )
         
         # Save and reload TSV
-        temp_tab_path = os.path.join(general_path, 'phage_results.tsv')
-        temp_tab = open(temp_tab_path, 'wb')
+        temp_tab = open(general_path+'/phage_results.tsv', 'wb')
         for split in std_splits:
             split = split.replace(b',', b'') # replace commas for pandas compatibility
             temp_tab.write(split + b'\n')
         temp_tab.close()
-        try:
-            results_orfs = pd.read_csv(temp_tab_path, sep='\t', lineterminator='\n', index_col=False)
-        except pd.errors.EmptyDataError as exc:
-            with open(temp_tab_path, 'r', encoding='utf-8', errors='ignore') as temp_in:
-                temp_preview = temp_in.read()
-            raise ValueError(
-                f"PHANOTATE output for {file_dir} produced an empty or invalid TSV file.\n"
-                f"Command output:\n{stdout_text}\n"
-                f"Temporary TSV content:\n{temp_preview}"
-            ) from exc
+        results_orfs = pd.read_csv(general_path+'/phage_results.tsv', sep='\t', lineterminator='\n', index_col=False)
         
         # fill up lists accordingly
         name = file.split('.fasta')[0]
@@ -314,137 +287,17 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
         old_genebase = pd.read_csv(general_path+'/phage_genes'+data_suffix+'.csv')
         genebase = pd.concat([old_genebase, genebase], axis=0)
     genebase.to_csv(general_path+'/phage_genes'+data_suffix+'.csv', index=False)
-
-    print('Completed PHANOTATE')
-    print('Number of phage genes:', len(genebase))
     return
 
 
-def compute_protein_embeddings(general_path, data_suffix='', add=False, num_genes=None, force_recompute=False):
+def compute_protein_embeddings(general_path, data_suffix='', add=False):
     """
     This function computes protein embeddings -> SLOW ON CPU! Alternatively, can be done
     in the cloud, using the separate notebook (compute_embeddings_cloud).
     """
-    import sys
-    
-    embeddings_path = os.path.join(general_path, f'phage_protein_embeddings{data_suffix}.csv')
-    embeddings_path_fallback = os.path.join(general_path, 'phage_protein_embeddings.csv')
-    
-    print(f'Checking for existing embeddings file: {embeddings_path}')
-    if (not force_recompute) and os.path.exists(embeddings_path):
-        print(f'Embedding file already exists at {embeddings_path}. Skipping computation.')
-        print('Use force_recompute=True to rebuild it.')
-        return
-    elif (not force_recompute) and os.path.exists(embeddings_path_fallback):
-        print(f'Using existing embedding file (without suffix): {embeddings_path_fallback}')
-        print('Skipping computation.')
-        return
-    
-    print('Starting compute_protein_embeddings...')
-    print(f'Python version: {sys.version}')
-    
-    available_memory_gb = None
-    try:
-        import psutil
-        available_memory_gb = psutil.virtual_memory().available / (1024**3)
-        total_memory_gb = psutil.virtual_memory().total / (1024**3)
-        print(f'Available memory: {available_memory_gb:.2f} GB')
-        print(f'Total memory: {total_memory_gb:.2f} GB')
-        
-        if available_memory_gb < 3.0:
-            print('WARNING: Less than 3 GB of memory available!')
-            print('The ProtTransBertBFD model requires at least 3-4 GB of free RAM.')
-            print('Recommendations:')
-            print('1. Restart the kernel to free memory from previous cells')
-            print('2. Close other applications using memory')
-            print('3. Use num_genes parameter to process fewer genes at a time')
-            print('4. Consider using the cloud notebook (compute_embeddings_cloud.ipynb)')
-            if num_genes is None:
-                print('5. Consider setting num_genes=10 or num_genes=20 to test with fewer genes')
-    except ImportError:
-        print('psutil not available, skipping memory diagnostics')
-    
-    print(f'Loading genebase from: {general_path}/phage_genes{data_suffix}.csv')
-    
-    try:
-        genebase = pd.read_csv(general_path+'/phage_genes'+data_suffix+'.csv')
-    except Exception as exc:
-        print(f'Error loading genebase file: {exc}')
-        raise
-    
-    if num_genes is not None:
-        print('Processing only the first ', num_genes, ' phage genes')
-        genebase = genebase.head(num_genes)
-    print('Number of phage genes:', len(genebase))
-    
-    print('Importing ProtTransBertBFDEmbedder...')
-    print('WARNING: This import may load a large model and require significant memory.')
-    print('If the kernel crashes here, you may need to:')
-    print('1. Free up memory by restarting the kernel and closing other applications')
-    print('2. Use the cloud notebook (compute_embeddings_cloud.ipynb) instead')
-    print('3. Process fewer genes at a time')
-    
-    try:
-        import sys
-        try:
-            import psutil
-            print(f'Memory before import: {psutil.virtual_memory().available / (1024**3):.2f} GB available')
-        except ImportError:
-            print('psutil not available, cannot check memory')
-        print('Starting import...')
-        sys.stdout.flush()
-        
-        from bio_embeddings.embed import ProtTransBertBFDEmbedder
-        
-        print('Import successful')
-        try:
-            import psutil
-            print(f'Memory after import: {psutil.virtual_memory().available / (1024**3):.2f} GB available')
-        except:
-            pass
-    except MemoryError as exc:
-        print(f'Memory error during import: {exc}')
-        print('The ProtTransBertBFD model requires several GB of free RAM.')
-        print('Try freeing memory or using cloud computing.')
-        raise
-    except Exception as exc:
-        print(f'Error importing ProtTransBertBFDEmbedder: {type(exc).__name__}: {exc}')
-        import traceback
-        print('Full traceback:')
-        traceback.print_exc()
-        raise
-    
-    print('Initializing ProtTransBertBFDEmbedder model...')
-    print('This may take a while and require significant memory (several GB)...')
-    print('If the kernel crashes, try reducing num_genes or using cloud computing')
-    time_start = time.time()
-    
-    try:
-        embedder = ProtTransBertBFDEmbedder()
-    except MemoryError as exc:
-        print(f'Memory error during embedder initialization: {exc}')
-        print('The ProtTransBertBFD model requires significant RAM. Consider:')
-        print('1. Reducing num_genes parameter')
-        print('2. Using a machine with more RAM')
-        print('3. Using the cloud notebook (compute_embeddings_cloud.ipynb)')
-        raise
-    except Exception as exc:
-        print(f'Error initializing embedder: {type(exc).__name__}: {exc}')
-        import traceback
-        print('Full traceback:')
-        traceback.print_exc()
-        raise
-    
-    time_end = time.time()
-    print('Time taken to initialize embedder:', time_end - time_start)
-    print('Embedder initialized successfully')
-    try:
-        import psutil
-        print(f'Memory after initialization: {psutil.virtual_memory().available / (1024**3):.2f} GB available')
-    except ImportError:
-        pass
+    genebase = pd.read_csv(general_path+'/phage_genes'+data_suffix+'.csv')
+    embedder = ProtTransBertBFDEmbedder()
     if add == True:
-        print('Adding new protein embeddings')
         old_embeddings_df = pd.read_csv(general_path+'/phage_protein_embeddings'+data_suffix+'.csv')
         protein_ids = list(old_embeddings_df['ID'])
         sequences = []; names = []
@@ -453,18 +306,11 @@ def compute_protein_embeddings(general_path, data_suffix='', add=False, num_gene
                 sequences.append(str(Seq(sequence).translate())[:-1])
                 names.append(genebase['gene_ID'][i])
     else:
-        print('Computing protein embeddings for all phage genes')
         names = list(genebase['gene_ID'])
-        print('Number of protein sequences to embed:', len(names))
         sequences = [str(Seq(sequence).translate())[:-1] for sequence in genebase['gene_sequence']]
     
-    print('Number of protein sequences to embed:', len(sequences))
-    protein_embeddings = []
-    progress_bar = tqdm(sequences, desc='Computing protein embeddings', unit='protein')
-    for protein_sequence in progress_bar:
-        reduced_embedding = embedder.reduce_per_protein(embedder.embed(protein_sequence))
-        protein_embeddings.append(reduced_embedding)
-    embeddings_df = pd.concat([pd.DataFrame({'ID':names}), pd.DataFrame(protein_embeddings)], axis=1)
+    embeddings = [embedder.reduce_per_protein(embedder.embed(sequence)) for sequence in tqdm(sequences)]
+    embeddings_df = pd.concat([pd.DataFrame({'ID':names}), pd.DataFrame(embeddings)], axis=1)
     if add == True:
         embeddings_df = pd.DataFrame(np.vstack([old_embeddings_df, embeddings_df]), columns=old_embeddings_df.columns)
     embeddings_df.to_csv(general_path+'/phage_protein_embeddings'+data_suffix+'.csv', index=False)
@@ -688,4 +534,3 @@ def process_data(general_path, phage_genomes_path, bact_genomes_path, phanotate_
     # finish
     print('Done!')
     return
-
