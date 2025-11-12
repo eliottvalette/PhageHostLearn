@@ -20,7 +20,7 @@ from Bio.SearchIO import HmmerIO
 from tqdm import tqdm
 from os import listdir
 from xgboost import XGBClassifier
-from bio_embeddings.embed import ProtTransBertBFDEmbedder
+# ProtTransBertBFDEmbedder imported lazily in compute_protein_embeddings to avoid loading heavy model at module import
 
 
 # 1 - FUNCTIONS
@@ -314,6 +314,9 @@ def phanotate_processing(general_path, phage_genomes_path, phanotate_path, data_
         old_genebase = pd.read_csv(general_path+'/phage_genes'+data_suffix+'.csv')
         genebase = pd.concat([old_genebase, genebase], axis=0)
     genebase.to_csv(general_path+'/phage_genes'+data_suffix+'.csv', index=False)
+
+    print('Completed PHANOTATE')
+    print('Number of phage genes:', len(genebase))
     return
 
 
@@ -322,16 +325,111 @@ def compute_protein_embeddings(general_path, data_suffix='', add=False, num_gene
     This function computes protein embeddings -> SLOW ON CPU! Alternatively, can be done
     in the cloud, using the separate notebook (compute_embeddings_cloud).
     """
-    genebase = pd.read_csv(general_path+'/phage_genes'+data_suffix+'.csv')
+    import sys
+    
+    print('Starting compute_protein_embeddings...')
+    print(f'Python version: {sys.version}')
+    
+    available_memory_gb = None
+    try:
+        import psutil
+        available_memory_gb = psutil.virtual_memory().available / (1024**3)
+        total_memory_gb = psutil.virtual_memory().total / (1024**3)
+        print(f'Available memory: {available_memory_gb:.2f} GB')
+        print(f'Total memory: {total_memory_gb:.2f} GB')
+        
+        if available_memory_gb < 3.0:
+            print('WARNING: Less than 3 GB of memory available!')
+            print('The ProtTransBertBFD model requires at least 3-4 GB of free RAM.')
+            print('Recommendations:')
+            print('1. Restart the kernel to free memory from previous cells')
+            print('2. Close other applications using memory')
+            print('3. Use num_genes parameter to process fewer genes at a time')
+            print('4. Consider using the cloud notebook (compute_embeddings_cloud.ipynb)')
+            if num_genes is None:
+                print('5. Consider setting num_genes=10 or num_genes=20 to test with fewer genes')
+    except ImportError:
+        print('psutil not available, skipping memory diagnostics')
+    
+    print(f'Loading genebase from: {general_path}/phage_genes{data_suffix}.csv')
+    
+    try:
+        genebase = pd.read_csv(general_path+'/phage_genes'+data_suffix+'.csv')
+    except Exception as exc:
+        print(f'Error loading genebase file: {exc}')
+        raise
+    
     if num_genes is not None:
         print('Processing only the first ', num_genes, ' phage genes')
         genebase = genebase.head(num_genes)
     print('Number of phage genes:', len(genebase))
+    
+    print('Importing ProtTransBertBFDEmbedder...')
+    print('WARNING: This import may load a large model and require significant memory.')
+    print('If the kernel crashes here, you may need to:')
+    print('1. Free up memory by restarting the kernel and closing other applications')
+    print('2. Use the cloud notebook (compute_embeddings_cloud.ipynb) instead')
+    print('3. Process fewer genes at a time')
+    
+    try:
+        import sys
+        try:
+            import psutil
+            print(f'Memory before import: {psutil.virtual_memory().available / (1024**3):.2f} GB available')
+        except ImportError:
+            print('psutil not available, cannot check memory')
+        print('Starting import...')
+        sys.stdout.flush()
+        
+        from bio_embeddings.embed import ProtTransBertBFDEmbedder
+        
+        print('Import successful')
+        try:
+            import psutil
+            print(f'Memory after import: {psutil.virtual_memory().available / (1024**3):.2f} GB available')
+        except:
+            pass
+    except MemoryError as exc:
+        print(f'Memory error during import: {exc}')
+        print('The ProtTransBertBFD model requires several GB of free RAM.')
+        print('Try freeing memory or using cloud computing.')
+        raise
+    except Exception as exc:
+        print(f'Error importing ProtTransBertBFDEmbedder: {type(exc).__name__}: {exc}')
+        import traceback
+        print('Full traceback:')
+        traceback.print_exc()
+        raise
+    
+    print('Initializing ProtTransBertBFDEmbedder model...')
+    print('This may take a while and require significant memory (several GB)...')
+    print('If the kernel crashes, try reducing num_genes or using cloud computing')
     time_start = time.time()
-    embedder = ProtTransBertBFDEmbedder()
+    
+    try:
+        embedder = ProtTransBertBFDEmbedder()
+    except MemoryError as exc:
+        print(f'Memory error during embedder initialization: {exc}')
+        print('The ProtTransBertBFD model requires significant RAM. Consider:')
+        print('1. Reducing num_genes parameter')
+        print('2. Using a machine with more RAM')
+        print('3. Using the cloud notebook (compute_embeddings_cloud.ipynb)')
+        raise
+    except Exception as exc:
+        print(f'Error initializing embedder: {type(exc).__name__}: {exc}')
+        import traceback
+        print('Full traceback:')
+        traceback.print_exc()
+        raise
+    
     time_end = time.time()
     print('Time taken to initialize embedder:', time_end - time_start)
-    print('Embedder initialized')
+    print('Embedder initialized successfully')
+    try:
+        import psutil
+        print(f'Memory after initialization: {psutil.virtual_memory().available / (1024**3):.2f} GB available')
+    except ImportError:
+        pass
     if add == True:
         print('Adding new protein embeddings')
         old_embeddings_df = pd.read_csv(general_path+'/phage_protein_embeddings'+data_suffix+'.csv')
