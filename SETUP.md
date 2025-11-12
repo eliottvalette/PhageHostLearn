@@ -55,13 +55,52 @@ which phanotate.py
 pip install fair-esm
 ```
 
-### 8. Register Jupyter kernel
+### 8. Install BLAST+
+
+BLAST+ is required for Kaptive to process bacterial genomes.
+
+**macOS (Homebrew):**
+```bash
+brew install blast
+```
+
+**Linux:**
+```bash
+sudo apt-get install ncbi-blast+
+# or
+sudo yum install ncbi-blast+
+```
+
+Verify installation:
+```bash
+which makeblastdb
+which tblastn
+```
+
+### 9. Download Kaptive reference database
+
+Download the Klebsiella K-locus reference database file required for Kaptive:
+
+```bash
+cd /Users/eliottvalette/Documents/Clones/PhageHostLearn/data
+
+# Télécharger le fichier directement depuis GitHub
+curl -L -o Klebsiella_k_locus_primary_reference.gbk \
+  https://raw.githubusercontent.com/klebgenomics/Kaptive/master/reference_database/Klebsiella_k_locus_primary_reference.gbk
+```
+
+Verify the file was downloaded:
+```bash
+ls -lh Klebsiella_k_locus_primary_reference.gbk
+```
+
+### 10. Register Jupyter kerne
 
 ```bash
 python -m ipykernel install --user --name=phagehostlearn --display-name "Python (phagehostlearn)"
 ```
 
-### 9. Verify installation
+### 11. Verify installation
 
 ```bash
 cd code
@@ -85,5 +124,8 @@ pip install regex requests safetensors tokenizers jinja2 networkx sympy
 pip install "huggingface-hub>=0.34.0,<1.0"
 pip install phanotate
 pip install fair-esm
+brew install blast  # macOS only, use apt-get/yum on Linux
+cd data && curl -L -o Klebsiella_k_locus_primary_reference.gbk \
+  https://raw.githubusercontent.com/klebgenomics/Kaptive/master/reference_database/Klebsiella_k_locus_primary_reference.gbk
 python -m ipykernel install --user --name=phagehostlearn --display-name "Python (phagehostlearn)"
 ```
