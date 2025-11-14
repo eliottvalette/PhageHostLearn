@@ -1,6 +1,16 @@
 # %% [markdown]
-# ## 1. Environment setup
-# Install core libraries, HMMER tools and protein-embedding dependencies.
+"""
+## 1. Environment setup
+
+This section sets up the computational environment required for the PhageHostLearn pipeline. We install core libraries for machine learning, bioinformatics tools including HMMER for protein domain detection, and protein embedding dependencies. The environment includes PyTorch for deep learning, XGBoost for classification, and BioPython for sequence processing.
+"""
+
+# %% [markdown]
+"""
+### 1.1 Package installation
+
+Install all required Python packages and system dependencies. This includes machine learning libraries (XGBoost, scikit-learn), bioinformatics tools (BioPython), deep learning frameworks (PyTorch, transformers), and protein embedding libraries (fair-esm, bio-embeddings). We also install HMMER, a critical tool for protein domain scanning that will be used later for RBP detection.
+"""
 
 # %%
 # Install core packages (reduced output)
@@ -16,6 +26,13 @@
 
 !pip install -q bio-embeddings --no-deps
 !pip install -q protobuf sentencepiece
+
+# %% [markdown]
+"""
+### 1.2 Import libraries
+
+Import all necessary Python libraries for data processing, machine learning, and bioinformatics analysis. This includes standard libraries for file operations, scientific computing (NumPy, Pandas), sequence processing (BioPython), machine learning (XGBoost, scikit-learn), and deep learning (PyTorch, ESM). We also configure the computational device (CPU or GPU) for optimal performance.
+"""
 
 # %%
 # Additional imports
@@ -48,10 +65,17 @@ from sklearn.metrics import roc_auc_score, auc, precision_recall_curve, roc_curv
 
 %matplotlib inline
 
+# Global torch device
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", DEVICE)
+
 
 # %% [markdown]
-# ## 1.1 Mount Google Drive and set paths
-# Mount Google Drive and define base folders for code, data and models.
+"""
+## 1.3 Mount Google Drive and set paths
+
+Mount Google Drive to access the project files and define base directory paths for code, data, and models. This step is essential for accessing the phage and bacterial genome files, pre-trained models, and saving intermediate results. The paths are organized to separate code, data, and model files for better project management.
+"""
 
 # %%
 from google.colab import drive
@@ -72,6 +96,13 @@ print("MODELS_DIR:", MODELS_DIR)
 print("Contenu de CODE_DIR :", os.listdir(CODE_DIR))
 
 
+# %% [markdown]
+"""
+### 1.4 Install PHANOTATE
+
+Install PHANOTATE, a specialized gene prediction tool designed for phage genomes. PHANOTATE is more accurate than standard gene callers for phage sequences because it accounts for the unique characteristics of phage genomes, such as overlapping genes and different codon usage patterns. This tool will be used to identify all potential genes in the phage genomes.
+"""
+
 # %%
 !pip install -q phanotate
 !pip install -q "ruamel.yaml>=0.17.10,<0.18.0"
@@ -81,8 +112,11 @@ print("Contenu de CODE_DIR :", os.listdir(CODE_DIR))
 
 
 # %% [markdown]
-# ## 1.2 Global configuration
-# Configure debug mode, subset sizes and global hyperparameters.
+"""
+## 1.5 Global configuration
+
+Configure global settings including debug mode for testing on smaller datasets, subset sizes for quick iterations, and hyperparameters for the XGBoost classifier. The debug mode allows running the pipeline on a reduced dataset (10 phages and 10 bacteria) for faster development and testing. The interaction matrix is loaded and filtered based on these settings.
+"""
 
 # %%
 DEBUG_SMALL = True  # Set to False to run on the full dataset
@@ -123,54 +157,64 @@ else:
     print("[DEBUG_SMALL] Disabled - using full interaction matrix.")
 
 # %% [markdown]
-# ## 1.3 ProtBert setup
-# Load the ProtBert model and helper functions for protein embeddings.
-# 
+"""
+## 1.6 ProtBert setup
+
+Load the ProtBert-BFD model from Hugging Face, a protein language model pre-trained on billions of protein sequences. This model will be used to generate per-residue and per-protein embeddings for phage gene sequences. We define helper functions to compute embeddings efficiently, handling sequence preprocessing (removing non-standard amino acids) and moving computations to the appropriate device (CPU or GPU).
+"""
 
 # %%
 from importlib.metadata import version
 import bio_embeddings
 from transformers import BertTokenizer, BertModel
-import torch
 import re
-import numpy as np
 
 print("bio-embeddings version:", version("bio-embeddings"))
 
-# Chargement du modèle ProtBert-BFD depuis Hugging Face
+# Load ProtBert-BFD model from Hugging Face and move it to DEVICE
 tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert_bfd", do_lower_case=False)
 model = BertModel.from_pretrained("Rostlab/prot_bert_bfd")
+model.to(DEVICE)
 model.eval()
 
 @torch.no_grad()
 def embed_protein_per_residue(seq: str) -> np.ndarray:
     """
-    Embeddings par résidu pour une séquence protéique.
-    Retour: ndarray de shape [L, 1024].
+    Per-residue embeddings for a protein sequence.
+    Returns: ndarray of shape [L, 1024].
     """
     seq = seq.strip().upper()
-    seq = re.sub(r"[UZOB]", "X", seq)  # convention ProtBert
+    seq = re.sub(r"[UZOB]", "X", seq)  # ProtBert convention
     seq_spaced = " ".join(list(seq))
     encoded = tokenizer(seq_spaced, return_tensors="pt")
+    encoded = {k: v.to(DEVICE) for k, v in encoded.items()}
+
     outputs = model(**encoded)
-    return outputs.last_hidden_state.squeeze(0).cpu().numpy()
+    return outputs.last_hidden_state.squeeze(0).detach().cpu().numpy()
 
 def embed_protein_per_protein(seq: str) -> np.ndarray:
     """
-    Embedding global de la protéine: moyenne sur les résidus.
-    Retour: ndarray de shape [1024].
+    Global protein embedding: mean over residues.
+    Returns: ndarray of shape [1024].
     """
     per_residue = embed_protein_per_residue(seq)
     return per_residue.mean(axis=0)
 
-print("HF ProtBert embedder OK")
+print("HF ProtBert embedder OK on device:", DEVICE)
 
 # %% [markdown]
-#  ## 2. Data processing
-#  Build gene- and locus-level resources from raw genomes and the interaction matrix.
+"""
+## 2. Data processing
+
+This section processes raw phage and bacterial genomes to extract structured data for machine learning. We build gene-level resources from phage genomes using PHANOTATE, compute protein embeddings, identify receptor-binding proteins (RBPs), and process bacterial K-locus sequences. Each step transforms raw sequence data into features that will be used for training the phage-host interaction prediction model.
+"""
 
 # %% [markdown]
-# ### 2.1 PHANOTATE: phage gene calling
+"""
+### 2.1 PHANOTATE: phage gene calling
+
+Run PHANOTATE on each phage genome to predict all potential genes (ORFs). PHANOTATE analyzes the nucleotide sequences and identifies open reading frames on both forward and reverse strands. The function processes each phage genome file, extracts predicted gene sequences, and builds a comprehensive database of all phage genes with their corresponding sequences. This gene database serves as the foundation for subsequent RBP identification.
+"""
 
 # %%
 def phanotate_processing(
@@ -306,6 +350,11 @@ def phanotate_processing(
     print(f'  Completed PHANOTATE - Number of phage genes: {len(genebase_df)}')
     return genebase_df
 
+# %% [markdown]
+"""
+Execute PHANOTATE processing on the phage genomes. This step reads all phage genome FASTA files, runs PHANOTATE gene prediction, and saves the results to a CSV file containing phage IDs, gene IDs, and gene sequences. The processing can be restricted to a subset of phages when running in debug mode.
+"""
+
 # %%
 print("\n[STEP 2.1] Running PHANOTATE on phage genomes...")
 phage_genomes_path = '../data/phages_genomes'
@@ -321,7 +370,11 @@ genebase_df.head()
 
 
 # %% [markdown]
-# ### 2.2 ProtBert embeddings for phage genes
+"""
+### 2.2 ProtBert embeddings for phage genes
+
+Compute protein embeddings for all predicted phage genes using ProtBert-BFD. Each DNA gene sequence is translated to its corresponding protein sequence, and then ProtBert generates a 1024-dimensional embedding vector. These embeddings capture the semantic and structural information of each protein, which will be used as features for RBP detection and phage-host interaction prediction. The embeddings are computed per-protein by averaging over all residue-level embeddings.
+"""
 
 # %%
 def compute_protein_embeddings(genebase_path, add=False, num_genes=None):
@@ -399,6 +452,11 @@ def compute_protein_embeddings(genebase_path, add=False, num_genes=None):
     print(f'  Protein embeddings saved to: ../data/phage_protein_embeddings.csv')
     return embeddings_df
 
+# %% [markdown]
+"""
+Compute ProtBert embeddings for all phage genes identified in the previous step. The function reads the gene database, translates DNA sequences to protein sequences, and generates embeddings using the pre-loaded ProtBert model. The results are saved to a CSV file for later use in RBP detection and feature construction.
+"""
+
 # %%
 genebase_path    = '../data/phage_genes.csv'
 embeddings_path  = '../data/phage_protein_embeddings.csv'
@@ -409,7 +467,11 @@ embeddings_df.head()
 
 
 # %% [markdown]
-# ### 2.3 PhageRBPdetect: RBP identification
+"""
+### 2.3 PhageRBPdetect: RBP identification
+
+Identify receptor-binding proteins (RBPs) from phage genes using PhageRBPdetect, a machine learning-based approach. This method combines protein embeddings from ProtBert with domain scores from HMMER scanning against a specialized Pfam database of phage RBP domains. An XGBoost classifier trained on known RBPs predicts which genes are likely RBPs. The pipeline filters results to keep only proteins of reasonable length (200-1500 amino acids) as these are typical for functional RBPs.
+"""
 
 # %%
 def hmmpress_python(hmm_path, pfam_file):
@@ -423,7 +485,6 @@ def hmmpress_python(hmm_path, pfam_file):
     press_process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     press_out, press_err = press_process.communicate()  # Capture output and error
     return press_out, press_err  # Return the output and error
-
 
 def single_hmmscan_python(hmm_path, pfam_file, fasta_file):
     """Run hmmscan for a given FASTA file of one (or multiple) sequences."""
@@ -450,26 +511,33 @@ def single_hmmscan_python(hmm_path, pfam_file, fasta_file):
     return scan_res
 
 def hmmscan_python(hmm_path, pfam_file, sequences_file, threshold=18):
+    """
+    Run hmmscan on a multi-FASTA file and return domain hits above threshold.
+    'sequences_file' est ici un chemin (relatif ou absolu) vers le fichier
+    contenant toutes les séquences à scanner.
+    """
     domains = []  # List to store domain names
     scores = []   # List to store bitscores
     biases = []   # List to store bias scores
     ranges = []   # List to store alignment ranges
 
-    # Iterate over each sequence in the fasta file
+    # On parse normalement le fichier multi-FASTA (où qu'il soit)
     for sequence in SeqIO.parse(sequences_file, 'fasta'):
 
-        # Write single sequence to a temporary fasta file
-        with open('single_sequence.fasta', 'w') as temp_fasta:
+        # ECRITURE du fichier temporaire dans hmm_path
+        single_fname = 'single_sequence.fasta'
+        single_fpath = os.path.join(hmm_path, single_fname)
+        with open(single_fpath, 'w') as temp_fasta:
             temp_fasta.write('>' + sequence.id + '\n' + str(sequence.seq) + '\n')
 
-        # Run hmmscan on the single sequence
-        scan_res = single_hmmscan_python(hmm_path, pfam_file, 'single_sequence.fasta')
+        # Run hmmscan sur ce fichier (le code cd déjà dans hmm_path)
+        scan_res = single_hmmscan_python(hmm_path, pfam_file, single_fname)
 
-        # Iterate over results lines and hits
+        # Analyse des résultats
         for line in scan_res:
             try:
                 for hit in line.hits:
-                    hsp = hit._items[0] # Take the first HSP (high scoring pair)
+                    hsp = hit._items[0]  # Take the first HSP (high scoring pair)
                     aln_start = hsp.query_range[0]
                     aln_stop = hsp.query_range[1]
 
@@ -484,23 +552,30 @@ def hmmscan_python(hmm_path, pfam_file, sequences_file, threshold=18):
                 # If there are no hits, skip
                 pass
 
-    # Remove the temporary fasta file after processing
-    os.remove('single_sequence.fasta')
-    return domains, scores, biases, ranges # Return results
+        # SUPPRESSION du fichier temporaire dans hmm_path
+        if os.path.exists(single_fpath):
+            os.remove(single_fpath)
+
+    return domains, scores, biases, ranges  # Return results
 
 def gene_domain_scan(hmmpath, pfam_file, gene_hits, threshold=18):
     """Run hmmscan on translated gene hits."""
     # Write each gene hit (translated) to a temporary protein fasta file
-    with open('protein_hits.fasta', 'w') as hits_fasta:
+    hits_fasta_path = 'protein_hits.fasta'
+    with open(hits_fasta_path, 'w') as hits_fasta:
         for i, gene_hit in enumerate(gene_hits):
             protein_sequence = str(Seq(gene_hit).translate())[:-1]
             hits_fasta.write('>' + str(i) + '_proteindomain_hit\n' + protein_sequence + '\n')
 
     # Scan the protein fasta file with hmmscan
-    domains, scores, biases, ranges = hmmscan_python(hmmpath, pfam_file, 'protein_hits.fasta', threshold)
+    domains, scores, biases, ranges = hmmscan_python(
+        hmmpath, pfam_file, hits_fasta_path, threshold
+    )
 
     # Remove the temporary fasta file
-    os.remove('protein_hits.fasta')
+    if os.path.exists(hits_fasta_path):
+        os.remove(hits_fasta_path)
+
     return domains, scores, biases, ranges  # Return scan results
 
 
@@ -588,6 +663,26 @@ def phageRBPdetect(genebase_path, pfam_path, hmmer_path, xgb_path, gene_embeddin
     print(f"  RBP detection completed - Found {len(rbp_base_df)} RBPs")
     return rbp_base_df
 
+# %% [markdown]
+"""
+Clean up any existing HMMER index files to ensure a fresh start for the HMM database pressing step. HMMER requires indexing the profile HMM database before it can be used for scanning.
+"""
+
+# %%
+import os, glob
+
+pfam_path = "../models/RBPdetect_phageRBPs.hmm"
+for ext in [".h3m", ".h3i", ".h3f", ".h3p"]:
+    f = pfam_path + ext
+    if os.path.exists(f):
+        os.remove(f)
+        print("Removed", f)
+
+# %% [markdown]
+"""
+Execute PhageRBPdetect to identify RBPs in the phage genomes. This step loads the gene database, protein embeddings, and the pre-trained XGBoost model. It scans all genes for RBP-related domains using HMMER, combines domain scores with protein embeddings, and applies the classifier to predict RBPs. The results are saved to RBPbase.csv containing all identified RBPs with their sequences and prediction scores.
+"""
+
 # %%
 # 2.3 PhageRBPdetect
 print("\n[STEP 2.3] Running PhageRBPdetect...")
@@ -602,9 +697,9 @@ hmmer_path = os.path.join(root_path, 'hmmer-3.4')
 if not os.path.exists(hmmer_path):
     raise FileNotFoundError(f"HMMER directory not found at {hmmer_path}")
 
-xgb_path = os.path.join(root_path, 'RBPdetect_xgb_hmm.json')
+xgb_path = os.path.join(MODELS_DIR, 'RBPdetect_xgb_hmm.json')
 if not os.path.exists(xgb_path):
-    xgb_path = os.path.join(root_path, 'code', 'data/RBPdetect_xgb_hmm.json')
+    raise FileNotFoundError(f"XGBoost model not found at {xgb_path}")
 
 gene_embeddings_path = os.path.join(root_path, 'data/phage_protein_embeddings.csv')
 if not os.path.exists(gene_embeddings_path):
@@ -631,7 +726,11 @@ rbp_base_df = phageRBPdetect(
 rbp_base_df.head()
 
 # %% [markdown]
-# ### 2.4 Kaptive: bacterial K-locus processing
+"""
+### 2.4 Kaptive: bacterial K-locus processing
+
+Process bacterial genomes using Kaptive to identify and extract K-locus sequences. Kaptive is a specialized tool for identifying bacterial capsule (K) loci from genome assemblies. For each bacterial genome, Kaptive identifies the K-locus, determines the serotype, and extracts all protein sequences within the locus. These sequences represent the bacterial surface structures that phages recognize and bind to, making them critical for predicting phage-host interactions.
+"""
 
 # %%
 def kaptive_python(database_path, file_path, output_dir='../data'):
@@ -771,6 +870,11 @@ def process_bacterial_genomes(
     return sero_df
 
 
+# %% [markdown]
+"""
+Execute Kaptive processing on bacterial genomes. This step runs Kaptive on each bacterial genome FASTA file, extracts K-locus sequences and serotype information, and builds a database of locus protein sequences. The results include a serotype table and a JSON file (Locibase) containing all protein sequences for each bacterial accession. These will be used to compute bacterial embeddings for interaction prediction.
+"""
+
 # %%
 print("\n[STEP 2.4] Running Kaptive on bacterial genomes...")
 
@@ -785,29 +889,35 @@ sero_df = process_bacterial_genomes(
 sero_df.head()
 
 # %% [markdown]
-# ## 3. Feature construction
-# Compute ESM-2 embeddings for RBPs and loci and build joint feature matrices.
-# 
+"""
+## 3. Feature construction
+
+Compute high-quality protein embeddings using ESM-2 (Evolutionary Scale Modeling) for both RBPs and bacterial locus proteins. ESM-2 is a state-of-the-art protein language model that provides superior embeddings compared to ProtBert for downstream tasks. We compute embeddings for all identified RBPs and for the proteins in bacterial K-loci, then construct joint feature matrices by concatenating RBP and locus embeddings. These feature matrices represent phage-bacteria pairs and will be used to train the interaction prediction model.
+"""
+
+# %% [markdown]
+"""
+### 3.1 ESM-2 embeddings for RBPs
+
+Compute ESM-2 embeddings for all receptor-binding proteins identified in the previous step. ESM-2 (esm2_t33_650M_UR50D) is a large protein language model that provides rich representations of protein sequences. For each RBP, we compute a per-protein embedding by averaging over all residue-level embeddings from the final layer of the model. These embeddings capture evolutionary and structural information that is crucial for predicting phage-host interactions.
+"""
 
 # %%
-
 def compute_esm2_embeddings_rbp(add=False):
     """
-    This function computes ESM-2 embeddings for the RBPs, from the RBPbase.csv file.
+    Compute ESM-2 embeddings for RBPs from the RBPbase.csv file.
 
-    INPUTS:
-    - general path to the project data folder
-    - data suffix to optionally add to the saved file name (default='')
     OUTPUT: esm2_embeddings_rbp.csv
     """
-    # load the ESM2 model
+    # Load the ESM2 model and move it to DEVICE
     model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
     batch_converter = alphabet.get_batch_converter()
+    model.to(DEVICE)
     model.eval()  # disables dropout for deterministic results
 
-    # get the correct data to embed
+    # Get the correct data to embed
     RBPbase = pd.read_csv('../data/RBPbase.csv')
-    if add == True:
+    if add is True:
         old_embeddings_df = pd.read_csv('../data/esm2_embeddings_rbp.csv')
         protein_ids = list(set(old_embeddings_df['protein_ID']))
         to_delete = [i for i, prot_id in enumerate(RBPbase['protein_ID']) if prot_id in protein_ids]
@@ -815,29 +925,47 @@ def compute_esm2_embeddings_rbp(add=False):
         RBPbase = RBPbase.reset_index(drop=True)
         print('Processing ', len(RBPbase['protein_sequence']), ' more sequences (add=True)')
 
-    # loop over data and embed (batch size = 1)
-    bar = tqdm(total=len(RBPbase['protein_sequence']), position=0, leave=True)
+    # Loop over data and embed (batch size = 1)
+    bar = tqdm(total=len(RBPbase['protein_sequence']), position=0, leave=True, desc="Embedding RBPs with ESM-2")
     sequence_representations = []
     for i, sequence in enumerate(RBPbase['protein_sequence']):
         data = [(RBPbase['protein_ID'][i], sequence)]
         batch_labels, batch_strs, batch_tokens = batch_converter(data)
+        batch_tokens = batch_tokens.to(DEVICE)
+
         with torch.no_grad():
             results = model(batch_tokens, repr_layers=[33], return_contacts=True)
         token_representations = results["representations"][33]
+
         for j, (_, seq) in enumerate(data):
-            sequence_representations.append(token_representations[j, 1 : len(seq) + 1].mean(0))
+            emb = token_representations[j, 1 : len(seq) + 1].mean(0).detach().cpu().numpy()
+            sequence_representations.append(emb)
         bar.update(1)
     bar.close()
 
-    # save results
+    # Save results
     phage_ids = RBPbase['phage_ID']
     ids = RBPbase['protein_ID']
-    embeddings_df = pd.concat([pd.DataFrame({'phage_ID':phage_ids}), pd.DataFrame({'protein_ID':ids}), pd.DataFrame(sequence_representations).astype('float')], axis=1)
-    if add == True:
-        embeddings_df = pd.DataFrame(np.vstack([old_embeddings_df, embeddings_df]), columns=old_embeddings_df.columns)
+    embeddings_df = pd.concat(
+        [
+            pd.DataFrame({'phage_ID': phage_ids}),
+            pd.DataFrame({'protein_ID': ids}),
+            pd.DataFrame(sequence_representations).astype('float')
+        ],
+        axis=1
+    )
+    if add is True:
+        embeddings_df = pd.DataFrame(
+            np.vstack([old_embeddings_df, embeddings_df]),
+            columns=old_embeddings_df.columns
+        )
     embeddings_df.to_csv('../data/esm2_embeddings_rbp.csv', index=False)
     return embeddings_df
 
+# %% [markdown]
+"""
+Execute ESM-2 embedding computation for RBPs. This step loads the RBP database and computes embeddings for each protein sequence. The computation can be skipped if embeddings already exist, allowing for efficient re-runs of the pipeline. The embeddings are saved to a CSV file for later use in feature matrix construction.
+"""
 
 # %%
 esm2_embeddings_rbp_df_path = '../data/esm2_embeddings_rbp.csv'
@@ -851,53 +979,76 @@ else :
 
 esm2_embeddings_rbp_df.head()
 
+# %% [markdown]
+"""
+### 3.2 ESM-2 embeddings for bacterial loci
+
+Compute ESM-2 embeddings for bacterial K-locus proteins. For each bacterial accession, we compute embeddings for all proteins in its K-locus and then average them to obtain a single locus-level embedding. This aggregated representation captures the overall structure and composition of the bacterial surface that phages interact with. The locus-level embeddings will be paired with phage RBP embeddings to form the input features for interaction prediction.
+"""
+
 # %%
 def compute_esm2_embeddings_loci(add=False):
     """
-    This function computes ESM-2 embeddings for the loci proteins, from the Locibase.json file.
+    Compute ESM-2 embeddings for loci proteins from the Locibase.json file.
 
-    INPUTS:
-    - general path to the project data folder
-    - data suffix to optionally add to the saved file name (default='')
     OUTPUT: esm2_embeddings_loci.csv
     """
-    # Load ESM-2 model
+    # Load ESM-2 model and move it to DEVICE
     model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
     batch_converter = alphabet.get_batch_converter()
+    model.to(DEVICE)
     model.eval()  # disables dropout for deterministic results
 
     # Load json file
     dict_file = open('../data/Locibase.json')
     loci_dict = json.load(dict_file)
-    if add == True:
+    if add is True:
         old_embeddings_df = pd.read_csv('../data/esm2_embeddings_loci.csv')
         old_accessions = list(set(old_embeddings_df['accession']))
-        for key in loci_dict.keys():
+        for key in list(loci_dict.keys()):
             if key in old_accessions:
                 del loci_dict[key]
         print('Processing ', len(loci_dict.keys()), ' more bacteria (add=True)')
 
-    # loop over data and embed (batch size = 1)
+    # Loop over data and embed (batch size = 1)
     loci_representations = []
-    for key in tqdm(loci_dict.keys()):
+    for key in tqdm(loci_dict.keys(), desc="Embedding loci with ESM-2"):
         embeddings = []
         for sequence in loci_dict[key]:
             data = [(key, sequence)]
             batch_labels, batch_strs, batch_tokens = batch_converter(data)
+            batch_tokens = batch_tokens.to(DEVICE)
+
             with torch.no_grad():
                 results = model(batch_tokens, repr_layers=[33], return_contacts=True)
             token_representations = results["representations"][33]
+
             for i, (_, seq) in enumerate(data):
-                embeddings.append(token_representations[i, 1 : len(seq) + 1].mean(0))
+                emb = token_representations[i, 1 : len(seq) + 1].mean(0).detach().cpu().numpy()
+                embeddings.append(emb)
         locus_embedding = np.mean(np.vstack(embeddings), axis=0)
         loci_representations.append(locus_embedding)
 
-    # save results
-    embeddings_df = pd.concat([pd.DataFrame({'accession':list(loci_dict.keys())}), pd.DataFrame(loci_representations)], axis=1)
-    if add == True:
-        embeddings_df = pd.DataFrame(np.vstack([old_embeddings_df, embeddings_df]), columns=old_embeddings_df.columns)
+    # Save results
+    embeddings_df = pd.concat(
+        [
+            pd.DataFrame({'accession': list(loci_dict.keys())}),
+            pd.DataFrame(loci_representations)
+        ],
+        axis=1
+    )
+    if add is True:
+        embeddings_df = pd.DataFrame(
+            np.vstack([old_embeddings_df, embeddings_df]),
+            columns=old_embeddings_df.columns
+        )
     embeddings_df.to_csv('../data/esm2_embeddings_loci.csv', index=False)
     return embeddings_df
+
+# %% [markdown]
+"""
+Execute ESM-2 embedding computation for bacterial loci. This step reads the Locibase JSON file containing all locus protein sequences, computes embeddings for each protein, and aggregates them per accession. The results are saved to a CSV file. Similar to RBP embeddings, this step can be skipped if embeddings already exist.
+"""
 
 # %%
 esm2_embeddings_loci_df_path = '../data/esm2_embeddings_loci.csv'
@@ -910,6 +1061,13 @@ else :
     esm2_embeddings_loci_df = compute_esm2_embeddings_loci()
 
 esm2_embeddings_loci_df.head()
+
+# %% [markdown]
+"""
+### 3.3 Construct feature matrices
+
+Build feature matrices for machine learning by pairing RBP embeddings with locus embeddings. For phages with multiple RBPs, we compute a mean embedding across all RBPs to represent the phage. We then create feature vectors by concatenating the phage (RBP) embedding with each bacterial (locus) embedding. This creates a dataset where each row represents a phage-bacteria pair with its corresponding interaction label from the interaction matrix. The feature matrices are used for training and evaluating the XGBoost classifier.
+"""
 
 # %%
 rbp_embeddings_path = '../data/esm2_embeddings_rbp.csv'
@@ -1019,6 +1177,11 @@ def construct_feature_matrices(
     elif mode == 'test':
         return features_lan, groups_loci
 
+# %% [markdown]
+"""
+Build the feature matrices from ESM-2 embeddings. This step combines RBP and locus embeddings into joint feature vectors, extracts interaction labels from the interaction matrix, and assigns group indices for cross-validation. The groups are used for leave-one-group-out cross-validation to ensure that related bacteria or phages are not split across training and test sets.
+"""
+
 # %%
 features_esm2, labels, groups_loci, groups_phage = construct_feature_matrices(
     loci_embeddings_path,
@@ -1030,11 +1193,18 @@ features_esm2, labels, groups_loci, groups_phage = construct_feature_matrices(
 )
 
 # %% [markdown]
-# ## 4. Model training and evaluation
+"""
+## 4. Model training and evaluation
+
+Train an XGBoost classifier to predict phage-host interactions using the ESM-2 feature matrices. We use leave-one-group-out cross-validation (LOGOCV) to evaluate model performance, ensuring that related bacteria (grouped by serotype similarity) are not split across training and test sets. This evaluation strategy provides a realistic assessment of the model's ability to generalize to new bacterial strains. We also compare model performance against a baseline microbiologist approach.
+"""
 
 # %% [markdown]
-# ### 4.1 Train XGBoost model and save checkpoint
-# 
+"""
+### 4.1 Train XGBoost model and save checkpoint
+
+Train the final XGBoost classifier on all available training data using the ESM-2 feature matrices. The model uses class weighting to handle the imbalanced nature of phage-host interactions (most pairs do not interact). Hyperparameters including learning rate, number of estimators, and max depth are set to balance model complexity and generalization. The trained model is saved as a checkpoint for later use in predictions.
+"""
 
 # %%
 cpus = 6
@@ -1055,7 +1225,16 @@ xgb.save_model('phagehostlearn_vbeta.json')
 
 
 # %% [markdown]
-# ### 4.2 Leave-one-group-out cross-validation (LOGOCV)
+"""
+### 4.2 Leave-one-group-out cross-validation (LOGOCV)
+
+Perform leave-one-group-out cross-validation to evaluate model performance. Bacteria are grouped based on serotype similarity (using a similarity threshold), and each group is held out as a test set while the model is trained on the remaining groups. This ensures that the model is evaluated on truly novel bacterial strains, providing a realistic assessment of generalization. For each fold, we train an XGBoost model and collect prediction scores for later analysis.
+"""
+
+# %% [markdown]
+"""
+Group bacteria by serotype similarity for LOGOCV. Bacteria with highly similar K-loci (above a similarity threshold) are grouped together to ensure they are not split across training and test sets. This grouping strategy prevents data leakage and provides a more realistic evaluation of the model's ability to generalize to new bacterial strains. In debug mode, we use the original per-locus grouping.
+"""
 
 # %%
 # If we want to set a threshold for grouping
@@ -1079,6 +1258,11 @@ else:
     threshold = 0.995
     threshold_str = '995'
     print("DEBUG_SMALL is True: skipping locus clustering, using original groups_loci.")
+
+# %% [markdown]
+"""
+Execute leave-one-group-out cross-validation. For each bacterial group, we train an XGBoost model on all other groups and evaluate on the held-out group. The model uses class weighting to handle imbalanced data and the same hyperparameters as the final model. Prediction scores and true labels are collected for each fold to compute performance metrics.
+"""
 
 # %%
 logo = LeaveOneGroupOut()
@@ -1113,6 +1297,11 @@ for train_index, test_index in logo.split(features_esm2, labels, groups_loci):
     pbar.update(1)
 pbar.close()
 
+# %% [markdown]
+"""
+Save LOGOCV results to a pickle file for later analysis. The results include prediction scores and true labels for each cross-validation fold, allowing us to compute various performance metrics including ROC AUC, precision-recall curves, and hit ratios at different k values.
+"""
+
 # %%
 # save results
 logo_results = {'labels': label_list, 'scores_language': scores_lan}
@@ -1126,7 +1315,16 @@ with open(pickle_path, 'wb') as f:
 print(f"Saved: {pickle_path}")
 
 # %% [markdown]
-# ## 5. Results analysis
+"""
+## 5. Results analysis
+
+Analyze the model performance using various metrics including ROC AUC curves, hit ratios at different k values, and performance breakdown by bacterial serotype. We compare the model's predictions against a baseline microbiologist approach that uses serotype matching to suggest phages. This analysis helps understand the model's strengths and limitations, and identifies which bacterial types are easier or harder to predict interactions for.
+"""
+
+# %% [markdown]
+"""
+Load LOGOCV results and prepare them for analysis. We read the saved prediction scores and labels, then compute ranked queries for hit ratio analysis. The ranked queries represent the model's predictions sorted by confidence score, which will be used to evaluate how often the correct interactions appear in the top-k predictions.
+"""
 
 # %%
 # read results
@@ -1149,7 +1347,11 @@ for i in range(len(set(groups_loci))):
         pass
 
 # %% [markdown]
-# ### ROC AUC curve
+"""
+### 5.1 ROC AUC curve
+
+Plot the receiver operating characteristic (ROC) curve to visualize the model's ability to distinguish between interacting and non-interacting phage-bacteria pairs. The ROC curve shows the trade-off between true positive rate and false positive rate at different classification thresholds. The area under the curve (AUC) provides a single metric summarizing overall classification performance, with values closer to 1.0 indicating better performance.
+"""
 
 # %%
 # results, ROC AUC
@@ -1172,7 +1374,11 @@ fig.savefig('../results/vbeta/logocv_rocauc.png', dpi=400)
 fig.savefig('../results/vbeta/logocv_rocauc_svg.svg', format='svg', dpi=400)
 
 # %% [markdown]
-# ### Hit ratio compared to microbiologist baseline
+"""
+### 5.2 Hit ratio compared to microbiologist baseline
+
+Compute hit ratios at different k values and compare against a baseline microbiologist approach. The baseline method suggests phages based on serotype matching: for a given bacterium, it recommends phages that are known to interact with other bacteria of the same serotype. Hit ratio at k measures the proportion of test cases where at least one correct interaction appears in the top-k predictions. This metric is particularly relevant for practical applications where researchers want to identify candidate phages for experimental testing.
+"""
 
 # %%
 # ---- Hit ratio against microbiologist approach (CSV only) ----
@@ -1293,6 +1499,11 @@ informed_hitratio  = {k: (hits[k]  / total)  if total  > 0 else np.nan for k in 
 informed_hitratio2 = {k: (hits2[k] / total2) if total2 > 0 else np.nan for k in hits2}
 
 
+# %% [markdown]
+"""
+Plot hit ratio curves showing model performance at different k values. The curve shows how often the model correctly identifies interacting phage-bacteria pairs within the top-k predictions. Higher hit ratios indicate better performance, with a hit ratio of 1.0 meaning that for all test cases, at least one correct interaction appears in the top-k predictions. This visualization helps understand the practical utility of the model for phage therapy applications.
+"""
+
 # %%
 # results, hit ratios @ K
 ks = np.linspace(1, 50, 50)
@@ -1310,9 +1521,16 @@ fig.savefig('../results/vbeta/logocv_hitratio_informed.png', dpi=400)
 fig.savefig('../results/vbeta/logocv_hitratio_informed_svg.svg', format='svg', dpi=400)
 
 # %% [markdown]
-# #### Performance per K-type
-# 
-# https://medium.com/@curryrowan/simplified-logistic-regression-classification-with-categorical-variables-in-python-1ce50c4b137
+"""
+#### 5.3 Performance per K-type
+
+Analyze model performance broken down by bacterial K-type (serotype). Different K-types may have varying levels of difficulty for prediction due to factors such as the number of known interactions, sequence diversity, or the complexity of the K-locus structure. This analysis helps identify which serotypes are well-predicted by the model and which may require additional training data or different approaches.
+"""
+
+# %% [markdown]
+"""
+Load LOGOCV results and serotype information to analyze performance per K-type. We group predictions by bacterial serotype and compute hit ratios for each serotype separately. This allows us to identify serotypes where the model performs particularly well or poorly.
+"""
 
 # %%
 threshold_str = '995'
@@ -1324,6 +1542,11 @@ label_list = logo_results['labels']
 
 # read K-types
 seros = pd.read_csv('../data/serotypes.csv')
+
+# %% [markdown]
+"""
+Compute mean hit ratio at k=10 for each K-type. For each serotype, we extract the relevant predictions and labels, compute ranked queries, and calculate the hit ratio. This provides a detailed view of model performance across different bacterial serotypes, helping to identify areas where the model excels or needs improvement.
+"""
 
 # %%
 # mean hit ratio per K-type
@@ -1346,6 +1569,11 @@ for unique in unique_seros:
         hr_lan = round(phlu.hitratio(rqueries_lan, 10), 3)
         performance_ktypes[unique] = [('HR_XGB', hr_lan)]
 
+# %% [markdown]
+"""
+Visualize the distribution of hit ratios across different K-types using a histogram. This shows how many serotypes achieve different levels of performance, helping to understand the overall consistency of model predictions. Most serotypes should show reasonable performance, with some variation expected due to differences in data availability and sequence characteristics.
+"""
+
 # %%
 performance_hr_xgb = []
 for ktype in performance_ktypes:
@@ -1362,7 +1590,16 @@ fig.tight_layout()
 fig.savefig('../results/vbeta/histogram_ktypes_svg.svg', format='svg', dpi=400)
 
 # %% [markdown]
-# ### Hit ratio per K-type vs number of positive labels
+"""
+### 5.4 Hit ratio per K-type vs number of positive labels
+
+Analyze the relationship between model performance (hit ratio) and the number of known positive interactions for each K-type. K-types with more training data (more known interactions) may show better performance, while those with limited data may be more challenging to predict. This analysis helps understand whether model performance is limited by data availability or by inherent biological complexity.
+"""
+
+# %% [markdown]
+"""
+Categorize K-types into three groups based on their hit ratio performance: perfect performers (HR=1.0), poor performers (HR=0.0), and intermediate performers. We then analyze the distribution of known positive interactions for each group to understand whether performance correlates with data availability.
+"""
 
 # %%
 top10 = [x[0] for x in sortedpairs if x[1] == 1] # all with HR == 1
@@ -1381,6 +1618,11 @@ for key in labelcount_ktypes.keys():
 countst10 = [i for x in countst10 for i in x]
 countsb10 = [i for x in countsb10 for i in x]
 countsmid = [i for x in countsmid for i in x]
+
+# %% [markdown]
+"""
+Visualize the distribution of known positive interactions for each performance category. This helps understand whether K-types with better performance have more training data, or if performance is driven by other factors such as sequence similarity or biological complexity. The histograms show how many bacteria of each type have different numbers of confirmed phage interactions.
+"""
 
 # %%
 countlist = [countst10, countsmid, countsb10]
